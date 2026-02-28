@@ -1607,7 +1607,8 @@ async def main():
     await db_init()
     logger.info("✅ Veritabanı hazır")
 
-    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+    from aiogram.client.default import DefaultBotProperties
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
