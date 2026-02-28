@@ -51,8 +51,8 @@ from aiogram.exceptions import TelegramBadRequest
 #  ⚙️  YAPILANDIRMA - BURADAN DEĞİŞTİR
 # ═══════════════════════════════════════════════════════════════════
 
-BOT_TOKEN      = os.getenv("BOT_TOKEN", "BOT_TOKEN_BURAYA")
-ADMIN_IDS      = [int(x) for x in os.getenv("ADMIN_IDS", "123456789").split(",")]
+BOT_TOKEN      = os.getenv("BOT_TOKEN", "8698709943:AAE3ZVzjyMSE9elndQCJo-9dVTWsgG41ABY")
+ADMIN_IDS      = [int(x) for x in os.getenv("ADMIN_IDS", "7672180974").split(",")]
 DB_PATH        = os.getenv("DB_PATH", "escrow.db")
 FEE_PERCENT    = float(os.getenv("FEE_PERCENT", "2.0"))   # Escrow komisyon %
 PAYMENT_HOURS  = int(os.getenv("PAYMENT_HOURS", "24"))    # Ödeme süresi (saat)
