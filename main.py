@@ -544,57 +544,6 @@ async def start_payout(bot: Bot, deal: Dict, net: float):
         "amount":    net
     })
 
-# Satıcı adres mesajını yakala
-@user_r.message(F.text)
-async def catch_payout_address(msg: Message, bot: Bot):
-    uid = msg.from_user.id
-    keys = await many("SELECT key, value FROM settings WHERE key LIKE 'payout_%'")
-    for row in keys:
-        try: data = json.loads(row["value"])
-        except: continue
-        if data.get("seller_id") != uid: continue
-
-        addr = msg.text.strip()
-        coin = data["coin"]
-        valid = (
-            (coin in ("TRX","USDT_TRC20") and addr.startswith("T") and len(addr) == 34) or
-            (coin == "ETH" and addr.startswith("0x") and len(addr) == 42) or
-            (coin == "BTC" and (addr.startswith("1") or addr.startswith("3") or addr.startswith("bc1")))
-        )
-        if not valid:
-            await msg.answer(f"❌ Geçersiz {coin} adresi. Tekrar deneyin:"); return
-
-        ca = await one("SELECT * FROM crypto_addr WHERE deal_id=?", (data["deal_id"],))
-        if not ca:
-            await msg.answer("❌ Kripto adres kaydı bulunamadı."); return
-
-        await msg.answer(f"⏳ <b>{data['amount']} {coin}</b> gönderiliyor...")
-        tx = None
-        if coin in ("TRX","USDT_TRC20"):
-            tx = await send_tron(ca["address"], ca["privkey"], addr, data["amount"], coin)
-        elif coin == "ETH":
-            tx = await send_eth(ca["privkey"], addr, data["amount"])
-
-        if tx:
-            await msg.answer(f"✅ <b>Gönderildi!</b>\n\nTX: <code>{tx}</code>")
-            await exe(
-                "INSERT INTO txlog(deal_id,type,amount,currency,to_address,tx_hash) VALUES(?,?,?,?,?,?)",
-                (data["deal_id"], "payout", data["amount"], coin, addr, tx)
-            )
-        else:
-            await msg.answer("⚠️ Otomatik gönderim başarısız. Admin manuel yapacak.")
-            for aid in ADMIN_IDS:
-                try:
-                    await bot.send_message(aid,
-                        f"🚨 Kripto gönderim BAŞARISIZ!\n"
-                        f"Deal #{data['deal_id']} | {data['amount']} {coin}\n"
-                        f"Hedef: {addr}"
-                    )
-                except: pass
-
-        await exe("DELETE FROM settings WHERE key=?", (row["key"],))
-        return
-
 # ════════════════════════════════════════════════════════
 #  DİSPUTE
 # ════════════════════════════════════════════════════════
@@ -626,7 +575,7 @@ async def close_cb(call: CallbackQuery):
     await call.answer()
 
 # ════════════════════════════════════════════════════════
-#  ANLAŞMALARıM OLUŞTURMA FSM
+#  ANLAŞMA OLUŞTURMA FSM
 # ════════════════════════════════════════════════════════
 
 CANCEL_KB = ReplyKeyboardMarkup(
@@ -648,26 +597,33 @@ async def deal_start(msg: Message, state: FSMContext):
         reply_markup=CANCEL_KB
     )
 
+# ─── FSM: PARTNER ────────────────────────────────────────────────
 @user_r.message(StateFilter(Deal.partner))
 async def deal_partner(msg: Message, state: FSMContext):
     if msg.text == "❌ İptal":
         await state.clear()
-        await msg.answer("❌ İptal edildi.", reply_markup=main_kb(msg.from_user.id)); return
+        await msg.answer("❌ İptal edildi.", reply_markup=main_kb(msg.from_user.id))
+        return
 
     text = msg.text.strip()
     partner_id = None
     if text.startswith("@"):
         u = await one("SELECT user_id FROM users WHERE username=?", (text[1:],))
-        if u: partner_id = u["user_id"]
+        if u:
+            partner_id = u["user_id"]
         else:
-            await msg.answer("❌ Kullanıcı bulunamadı. Bot ile konuşmaları gerek."); return
+            await msg.answer("❌ Kullanıcı bulunamadı. Bot ile konuşmaları gerek.")
+            return
     else:
-        try: partner_id = int(text)
+        try:
+            partner_id = int(text)
         except:
-            await msg.answer("❌ Geçersiz. Sayı veya @kullanıcıadı girin."); return
+            await msg.answer("❌ Geçersiz. Sayı veya @kullanıcıadı girin.")
+            return
 
     if partner_id == msg.from_user.id:
-        await msg.answer("❌ Kendinizle anlaşma olamaz!"); return
+        await msg.answer("❌ Kendinizle anlaşma olamaz!")
+        return
 
     await state.update_data(partner_id=partner_id)
     await state.set_state(Deal.role)
@@ -680,6 +636,7 @@ async def deal_partner(msg: Message, state: FSMContext):
         )
     )
 
+# ─── FSM: ROLE (callback) ─────────────────────────────────────────
 @user_r.callback_query(F.data.startswith("role:"), StateFilter(Deal.role))
 async def deal_role(call: CallbackQuery, state: FSMContext):
     await state.update_data(role=call.data.split(":")[1])
@@ -691,16 +648,20 @@ async def deal_role(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+# ─── FSM: AMOUNT ──────────────────────────────────────────────────
 @user_r.message(StateFilter(Deal.amount))
 async def deal_amount(msg: Message, state: FSMContext):
     if msg.text == "❌ İptal":
         await state.clear()
-        await msg.answer("❌ İptal.", reply_markup=main_kb(msg.from_user.id)); return
+        await msg.answer("❌ İptal.", reply_markup=main_kb(msg.from_user.id))
+        return
     try:
         amount = float(msg.text.replace(",", ".").strip())
-        if amount <= 0: raise ValueError
+        if amount <= 0:
+            raise ValueError
     except:
-        await msg.answer("❌ Geçersiz tutar."); return
+        await msg.answer("❌ Geçersiz tutar. Örnek: <code>500</code>")
+        return
 
     await state.update_data(amount=amount)
     await state.set_state(Deal.currency)
@@ -712,6 +673,7 @@ async def deal_amount(msg: Message, state: FSMContext):
         )
     )
 
+# ─── FSM: CURRENCY (callback) ─────────────────────────────────────
 @user_r.callback_query(F.data.startswith("cur:"), StateFilter(Deal.currency))
 async def deal_currency(call: CallbackQuery, state: FSMContext):
     await state.update_data(currency=call.data.split(":")[1])
@@ -723,13 +685,16 @@ async def deal_currency(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+# ─── FSM: DESC ────────────────────────────────────────────────────
 @user_r.message(StateFilter(Deal.desc))
 async def deal_desc(msg: Message, state: FSMContext):
     if msg.text == "❌ İptal":
         await state.clear()
-        await msg.answer("❌ İptal.", reply_markup=main_kb(msg.from_user.id)); return
+        await msg.answer("❌ İptal.", reply_markup=main_kb(msg.from_user.id))
+        return
     if len(msg.text.strip()) < 5:
-        await msg.answer("❌ Çok kısa açıklama."); return
+        await msg.answer("❌ Çok kısa açıklama.")
+        return
 
     await state.update_data(description=msg.text.strip())
     await state.set_state(Deal.method)
@@ -742,6 +707,7 @@ async def deal_desc(msg: Message, state: FSMContext):
         )
     )
 
+# ─── FSM: METHOD (callback) ───────────────────────────────────────
 @user_r.callback_query(F.data.startswith("mth:"), StateFilter(Deal.method))
 async def deal_method(call: CallbackQuery, state: FSMContext):
     method = call.data.split(":")[1]
@@ -767,12 +733,14 @@ async def deal_method(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+# ─── FSM: CONFIRM (callback) ──────────────────────────────────────
 @user_r.callback_query(F.data.startswith("dcreate:"), StateFilter(Deal.confirm))
 async def deal_confirm(call: CallbackQuery, state: FSMContext, bot: Bot):
     if call.data == "dcreate:no":
         await state.clear()
         await call.message.answer("❌ İptal.", reply_markup=main_kb(call.from_user.id))
-        await call.answer(); return
+        await call.answer()
+        return
 
     data = await state.get_data()
     await state.clear()
@@ -839,6 +807,67 @@ async def deal_confirm(call: CallbackQuery, state: FSMContext, bot: Bot):
 
     await call.message.answer(txt, reply_markup=main_kb(uid))
     await call.answer()
+
+# ════════════════════════════════════════════════════════
+#  PAYOUT ADDRESS CATCHER — EN SONA KONULMALI
+#  (Sadece state yokken ve payout beklenirken çalışır)
+# ════════════════════════════════════════════════════════
+
+@user_r.message(StateFilter(None), F.text)
+async def catch_payout_address(msg: Message, bot: Bot):
+    uid = msg.from_user.id
+    keys = await many("SELECT key, value FROM settings WHERE key LIKE 'payout_%'")
+    for row in keys:
+        try:
+            data = json.loads(row["value"])
+        except:
+            continue
+        if data.get("seller_id") != uid:
+            continue
+
+        addr = msg.text.strip()
+        coin = data["coin"]
+        valid = (
+            (coin in ("TRX","USDT_TRC20") and addr.startswith("T") and len(addr) == 34) or
+            (coin == "ETH" and addr.startswith("0x") and len(addr) == 42) or
+            (coin == "BTC" and (addr.startswith("1") or addr.startswith("3") or addr.startswith("bc1")))
+        )
+        if not valid:
+            await msg.answer(f"❌ Geçersiz {coin} adresi. Tekrar deneyin:")
+            return
+
+        ca = await one("SELECT * FROM crypto_addr WHERE deal_id=?", (data["deal_id"],))
+        if not ca:
+            await msg.answer("❌ Kripto adres kaydı bulunamadı.")
+            return
+
+        await msg.answer(f"⏳ <b>{data['amount']} {coin}</b> gönderiliyor...")
+        tx = None
+        if coin in ("TRX","USDT_TRC20"):
+            tx = await send_tron(ca["address"], ca["privkey"], addr, data["amount"], coin)
+        elif coin == "ETH":
+            tx = await send_eth(ca["privkey"], addr, data["amount"])
+
+        if tx:
+            await msg.answer(f"✅ <b>Gönderildi!</b>\n\nTX: <code>{tx}</code>")
+            await exe(
+                "INSERT INTO txlog(deal_id,type,amount,currency,to_address,tx_hash) VALUES(?,?,?,?,?,?)",
+                (data["deal_id"], "payout", data["amount"], coin, addr, tx)
+            )
+        else:
+            await msg.answer("⚠️ Otomatik gönderim başarısız. Admin manuel yapacak.")
+            for aid in ADMIN_IDS:
+                try:
+                    await bot.send_message(aid,
+                        f"🚨 Kripto gönderim BAŞARISIZ!\n"
+                        f"Deal #{data['deal_id']} | {data['amount']} {coin}\n"
+                        f"Hedef: {addr}"
+                    )
+                except:
+                    pass
+
+        await exe("DELETE FROM settings WHERE key=?", (row["key"],))
+        return
 
 # ════════════════════════════════════════════════════════
 #  ADMİN PANEL
@@ -1240,7 +1269,6 @@ async def adm_send_to(msg: Message, state: FSMContext):
     data = await state.get_data()
     if "forced_amount" in data:
         await state.set_state(Adm.send_amt)
-        # forced amount ile devam
         await adm_do_send(msg, state)
     else:
         await state.set_state(Adm.send_amt)
