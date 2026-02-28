@@ -496,32 +496,22 @@ async def release_ok(call: CallbackQuery, bot: Bot):
     fee = d["amount"] * FEE_PERCENT / 100
     net = round(d["amount"] - fee, 6)
 
-    # Satıcıya bildir
-    try:
-        await bot.send_message(
-            d["seller_id"],
-            f"🎉 <b>Ödeme Serbest Bırakıldı!</b>\n\n"
-            f"Anlaşma #{d['code']} onaylandı.\n"
-            f"💰 Net: <b>{net} {d['currency']}</b> (komisyon: {fee:.2f})"
-        )
-    except Exception: pass
+    # Her iki yöntemde de satıcıya seçenek sun (IBAN veya Kripto)
+    asyncio.create_task(start_payout(bot, d, net))
 
     # Admine bildir
     for aid in ADMIN_IDS:
         try:
             await bot.send_message(aid,
                 f"💸 <b>#{d['code']} Serbest Bırakıldı</b>\n"
-                f"Satıcı: {d['seller_id']} | Net: {net} {d['currency']}",
+                f"Satıcı: {d['seller_id']} | Net: {net} {d['currency']}\n"
+                f"⏳ Satıcı ödeme yöntemini seçiyor...",
                 reply_markup=ikb(
-                    [("💸 Kripto Gönder", f"adm_payout:{did}")],
-                    [("✅ IBAN Gönderildi", f"adm_iban_done:{did}")]
+                    [("💸 Kripto Gönder", f"adm_payout:{did}"),
+                     ("✅ IBAN Gönderildi", f"adm_iban_done:{did}")]
                 )
             )
         except Exception: pass
-
-    # Kripto ise otomatik payout başlat
-    if d["method"] in COINS:
-        asyncio.create_task(start_payout(bot, d, net))
 
     try:
         await call.message.edit_text("✅ Para serbest bırakıldı! Satıcıya bildirim gönderildi.")
@@ -530,18 +520,36 @@ async def release_ok(call: CallbackQuery, bot: Bot):
     await call.answer()
 
 async def start_payout(bot: Bot, deal: Dict, net: float):
-    """Satıcıdan kripto adres iste"""
+    """
+    Satıcıya ödeme yöntemini seçtirir (IBAN veya Kripto).
+    Anlaşma kripto ile yapılmışsa kripto seçeneği de sunulur.
+    """
+    coin_label = COINS.get(deal["method"], deal["method"]) if deal["method"] in COINS else None
+
+    # Buton satırları: her zaman IBAN var, kripto varsa ek seçenek
+    btns = [[("🏦 IBAN / EFT ile al", f"seller_payout_method:{deal['id']}:iban")]]
+    if coin_label:
+        btns.append([(f"🔗 {coin_label} ile al", f"seller_payout_method:{deal['id']}:crypto")])
+
     await bot.send_message(
         deal["seller_id"],
-        f"💸 <b>Kripto Ödemeniz Hazır!</b>\n\n"
-        f"Tutar: <b>{net} {deal['method']}</b>\n\n"
-        f"📬 {deal['method']} adresinizi gönderin:"
+        f"🎉 <b>Ödemeniz Onaylandı!</b>\n\n"
+        f"Anlaşma: <b>#{deal['code']}</b>\n"
+        f"💰 Net tutar: <b>{net} {deal['currency']}</b>\n\n"
+        f"📬 Ödemeyi nasıl almak istersiniz?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t, callback_data=d) for t, d in row]
+            for row in btns
+        ])
     )
-    await cfg_set(f"payout_{deal['id']}", {
+    # Bekleyen payout kaydını oluştur (henüz yöntem seçilmedi)
+    await cfg_set(f"payout_pending_{deal['id']}", {
         "seller_id": deal["seller_id"],
         "deal_id":   deal["id"],
         "coin":      deal["method"],
-        "amount":    net
+        "amount":    net,
+        "currency":  deal["currency"],
+        "code":      deal["code"],
     })
 
 # ════════════════════════════════════════════════════════
@@ -809,14 +817,155 @@ async def deal_confirm(call: CallbackQuery, state: FSMContext, bot: Bot):
     await call.answer()
 
 # ════════════════════════════════════════════════════════
-#  PAYOUT ADDRESS CATCHER — EN SONA KONULMALI
-#  (Sadece state yokken ve payout beklenirken çalışır)
+#  SATICI ÖDEME YÖNTEMİ SEÇİMİ (callback)
+#  seller_payout_method:{deal_id}:iban  veya  :crypto
+# ════════════════════════════════════════════════════════
+
+@user_r.callback_query(F.data.startswith("seller_payout_method:"))
+async def seller_payout_method(call: CallbackQuery, bot: Bot):
+    parts   = call.data.split(":")          # ["seller_payout_method", deal_id, method]
+    deal_id = int(parts[1])
+    method  = parts[2]                      # "iban" veya "crypto"
+    uid     = call.from_user.id
+
+    # Bekleyen payout kaydını al
+    pending = await cfg_get(f"payout_pending_{deal_id}")
+    if not pending or pending.get("seller_id") != uid:
+        await call.answer("⚠️ Bu işlem size ait değil ya da süresi doldu.", show_alert=True)
+        return
+
+    if method == "iban":
+        # IBAN akışını başlat
+        await cfg_set(f"iban_payout_{deal_id}", {
+            "seller_id": uid,
+            "deal_id":   deal_id,
+            "amount":    pending["amount"],
+            "currency":  pending["currency"],
+            "code":      pending["code"],
+            "step":      "iban"
+        })
+        await exe("DELETE FROM settings WHERE key=?", (f"payout_pending_{deal_id}",))
+        await call.message.edit_text(
+            f"🏦 <b>IBAN ile Ödeme</b>\n\n"
+            f"💰 Net tutar: <b>{pending['amount']} {pending['currency']}</b>\n\n"
+            f"Lütfen <b>IBAN numaranızı</b> gönderin:\n"
+            f"<i>Örnek: TR38 0015 7000 0000 0202 1155 21</i>"
+        )
+
+    elif method == "crypto":
+        coin = pending.get("coin", "")
+        if coin not in COINS:
+            await call.answer("⚠️ Bu anlaşma için kripto seçeneği yok.", show_alert=True)
+            return
+        await cfg_set(f"crypto_payout_{deal_id}", {
+            "seller_id": uid,
+            "deal_id":   deal_id,
+            "coin":      coin,
+            "amount":    pending["amount"],
+            "code":      pending["code"],
+        })
+        await exe("DELETE FROM settings WHERE key=?", (f"payout_pending_{deal_id}",))
+        await call.message.edit_text(
+            f"🔗 <b>{COINS.get(coin, coin)} ile Ödeme</b>\n\n"
+            f"💰 Net tutar: <b>{pending['amount']} {coin}</b>\n\n"
+            f"📬 <b>{coin}</b> cüzdan adresinizi gönderin:"
+        )
+
+    await call.answer()
+
+# ════════════════════════════════════════════════════════
+#  SATICI IBAN CATCHER — adım adım IBAN bilgisi topla
+#  (Sadece state=None iken çalışır)
+# ════════════════════════════════════════════════════════
+
+@user_r.message(StateFilter(None), F.text)
+async def catch_seller_iban(msg: Message, bot: Bot):
+    uid  = msg.from_user.id
+    text = msg.text.strip()
+
+    keys = await many("SELECT key, value FROM settings WHERE key LIKE 'iban_payout_%'")
+    for row in keys:
+        try:
+            data = json.loads(row["value"])
+        except:
+            continue
+        if data.get("seller_id") != uid:
+            continue
+
+        step = data.get("step", "iban")
+
+        # ADIM 1 — IBAN numarası
+        if step == "iban":
+            iban = text.replace(" ", "").upper()
+            if len(iban) < 16:
+                await msg.answer(
+                    "❌ Geçersiz IBAN. Tekrar girin:\n"
+                    "<i>Örnek: TR38 0015 7000 0000 0202 1155 21</i>"
+                )
+                return
+            data["iban"] = iban
+            data["step"] = "bank"
+            await cfg_set(row["key"], data)
+            await msg.answer("🏦 Bankanızın adını girin:\n<i>Örnek: Ziraat Bankası</i>")
+            return
+
+        # ADIM 2 — Banka adı
+        elif step == "bank":
+            if len(text) < 2:
+                await msg.answer("❌ Geçersiz banka adı. Tekrar girin:")
+                return
+            data["bank"] = text
+            data["step"] = "holder"
+            await cfg_set(row["key"], data)
+            await msg.answer("👤 Hesap sahibinin tam adını girin:\n<i>Örnek: Ahmet Yılmaz</i>")
+            return
+
+        # ADIM 3 — Hesap sahibi → admin'e ilet
+        elif step == "holder":
+            if len(text) < 3:
+                await msg.answer("❌ Geçersiz isim. Tekrar girin:")
+                return
+            data["holder"] = text
+
+            await msg.answer(
+                f"✅ <b>Banka bilgileriniz alındı!</b>\n\n"
+                f"IBAN: <code>{data['iban']}</code>\n"
+                f"Banka: {data['bank']}\n"
+                f"Hesap Sahibi: {data['holder']}\n\n"
+                f"💰 Transfer tutarı: <b>{data['amount']} {data['currency']}</b>\n\n"
+                f"⏳ Admin en kısa sürede ödemenizi gerçekleştirecek."
+            )
+
+            for aid in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        aid,
+                        f"🏦 <b>Satıcı IBAN Bilgisi!</b>\n\n"
+                        f"Anlaşma: #{data['code']}\n"
+                        f"Satıcı ID: {uid}\n\n"
+                        f"💳 IBAN: <code>{data['iban']}</code>\n"
+                        f"🏦 Banka: {data['bank']}\n"
+                        f"👤 Hesap Sahibi: {data['holder']}\n\n"
+                        f"💰 Gönderilecek: <b>{data['amount']} {data['currency']}</b>",
+                        reply_markup=ikb(
+                            [("✅ IBAN Gönderildi", f"adm_iban_done:{data['deal_id']}")]
+                        )
+                    )
+                except Exception:
+                    pass
+
+            await exe("DELETE FROM settings WHERE key=?", (row["key"],))
+            return
+
+# ════════════════════════════════════════════════════════
+#  SATICI KRİPTO ADRES CATCHER
+#  (Sadece state=None iken ve crypto_payout kaydı varken)
 # ════════════════════════════════════════════════════════
 
 @user_r.message(StateFilter(None), F.text)
 async def catch_payout_address(msg: Message, bot: Bot):
-    uid = msg.from_user.id
-    keys = await many("SELECT key, value FROM settings WHERE key LIKE 'payout_%'")
+    uid  = msg.from_user.id
+    keys = await many("SELECT key, value FROM settings WHERE key LIKE 'crypto_payout_%'")
     for row in keys:
         try:
             data = json.loads(row["value"])
@@ -828,40 +977,57 @@ async def catch_payout_address(msg: Message, bot: Bot):
         addr = msg.text.strip()
         coin = data["coin"]
         valid = (
-            (coin in ("TRX","USDT_TRC20") and addr.startswith("T") and len(addr) == 34) or
-            (coin == "ETH" and addr.startswith("0x") and len(addr) == 42) or
-            (coin == "BTC" and (addr.startswith("1") or addr.startswith("3") or addr.startswith("bc1")))
+            (coin in ("TRX", "USDT_TRC20") and addr.startswith("T") and len(addr) == 34) or
+            (coin == "ETH"                 and addr.startswith("0x") and len(addr) == 42) or
+            (coin == "BTC"                 and (addr.startswith("1") or addr.startswith("3") or addr.startswith("bc1")))
         )
         if not valid:
-            await msg.answer(f"❌ Geçersiz {coin} adresi. Tekrar deneyin:")
+            await msg.answer(
+                f"❌ Geçersiz <b>{coin}</b> adresi. Tekrar deneyin:\n"
+                f"<i>Lütfen geçerli bir {coin} cüzdan adresi gönderin.</i>"
+            )
             return
 
         ca = await one("SELECT * FROM crypto_addr WHERE deal_id=?", (data["deal_id"],))
         if not ca:
-            await msg.answer("❌ Kripto adres kaydı bulunamadı.")
+            await msg.answer("❌ Kripto adres kaydı bulunamadı. Adminle iletişime geç.")
             return
 
-        await msg.answer(f"⏳ <b>{data['amount']} {coin}</b> gönderiliyor...")
+        await msg.answer(f"⏳ <b>{data['amount']} {coin}</b> gönderiliyor, lütfen bekleyin...")
         tx = None
-        if coin in ("TRX","USDT_TRC20"):
+        if coin in ("TRX", "USDT_TRC20"):
             tx = await send_tron(ca["address"], ca["privkey"], addr, data["amount"], coin)
         elif coin == "ETH":
             tx = await send_eth(ca["privkey"], addr, data["amount"])
 
         if tx:
-            await msg.answer(f"✅ <b>Gönderildi!</b>\n\nTX: <code>{tx}</code>")
+            await msg.answer(
+                f"✅ <b>Ödeme Gönderildi!</b>\n\n"
+                f"💰 Tutar: <b>{data['amount']} {coin}</b>\n"
+                f"📬 Adres: <code>{addr}</code>\n"
+                f"🔗 TX: <code>{tx}</code>"
+            )
             await exe(
                 "INSERT INTO txlog(deal_id,type,amount,currency,to_address,tx_hash) VALUES(?,?,?,?,?,?)",
                 (data["deal_id"], "payout", data["amount"], coin, addr, tx)
             )
         else:
-            await msg.answer("⚠️ Otomatik gönderim başarısız. Admin manuel yapacak.")
+            await msg.answer(
+                "⚠️ Otomatik gönderim şu an başarısız oldu.\n"
+                "Admin en kısa sürede manuel olarak gönderecek."
+            )
             for aid in ADMIN_IDS:
                 try:
-                    await bot.send_message(aid,
-                        f"🚨 Kripto gönderim BAŞARISIZ!\n"
-                        f"Deal #{data['deal_id']} | {data['amount']} {coin}\n"
-                        f"Hedef: {addr}"
+                    await bot.send_message(
+                        aid,
+                        f"🚨 <b>Kripto Gönderim BAŞARISIZ!</b>\n\n"
+                        f"Anlaşma: #{data['code']}\n"
+                        f"Satıcı: {uid}\n"
+                        f"Coin: {coin} | Tutar: {data['amount']}\n"
+                        f"Hedef adres: <code>{addr}</code>",
+                        reply_markup=ikb(
+                            [("💸 Manuel Gönder", f"adm_payout:{data['deal_id']}")]
+                        )
                     )
                 except:
                     pass
