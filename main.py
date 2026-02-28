@@ -560,7 +560,12 @@ async def pay_info(call: CallbackQuery) -> None:
     if not d:
         await call.answer("Bulunamadı", show_alert=True)
         return
+    uid = call.from_user.id
+    # IBAN bilgisi sadece alıcıya
     if d["method"] == "IBAN":
+        if uid != d["buyer_id"]:
+            await call.answer("Bu bilgi yalnızca alıcıya görünür.", show_alert=True)
+            return
         ii = await cfg_get("iban_info", {})
         await call.message.answer(
             f"🏦 <b>IBAN Ödeme Bilgileri</b>\n\n"
@@ -569,9 +574,15 @@ async def pay_info(call: CallbackQuery) -> None:
             f"IBAN: <code>{ii.get('iban', 'Henüz ayarlanmadı')}</code>\n\n"
             f"💰 Gönderilecek Tutar: <b>{d['amount']} {d['currency']}</b>\n"
             f"📝 Açıklama: <b>ESCROW-{d['code']}</b>\n\n"
-            f"⚠️ Havaleyi yaptıktan sonra admin onaylayacak, bekleyin."
+            f"⚠️ Havaleyi yaptıktan sonra aşağıdaki butona basın:",
+            reply_markup=ikb(
+                [("✅ Ödemeyi Yaptım", f"buyer_paid:{did}")]
+            )
         )
     else:
+        if uid != d["buyer_id"]:
+            await call.answer("Bu bilgi yalnızca alıcıya görünür.", show_alert=True)
+            return
         ca = await one("SELECT * FROM crypto_addr WHERE deal_id=?", (did,))
         if ca:
             await call.message.answer(
@@ -579,13 +590,55 @@ async def pay_info(call: CallbackQuery) -> None:
                 f"<code>{ca['address']}</code>\n\n"
                 f"💰 Gönderilecek: <b>{ca['expected']} {d['method']}</b>\n"
                 f"⏰ Kalan süre: {PAYMENT_HOURS} saat\n\n"
-                f"✅ Ödeme otomatik olarak kontrol edilir, işlem onaylandıktan sonra bildirim alırsınız."
+                f"✅ Ödeme otomatik olarak kontrol edilir."
             )
     await call.answer()
 
-# ═══════════════════════════════════════════════════════════════════
-#  TESLİM ONAYI
-# ═══════════════════════════════════════════════════════════════════
+
+@user_r.callback_query(F.data.startswith("buyer_paid:"))
+async def buyer_paid(call: CallbackQuery, bot: Bot) -> None:
+    """Alıcı 'Ödemeyi Yaptım' butonuna bastı — admin'e bildirim gönder."""
+    did = int(call.data.split(":")[1])
+    d   = await one("SELECT * FROM deals WHERE id=?", (did,))
+    if not d:
+        await call.answer("Bulunamadı", show_alert=True)
+        return
+    if call.from_user.id != d["buyer_id"]:
+        await call.answer("❌ Yetkisiz", show_alert=True)
+        return
+    if d["status"] != "payment_pending":
+        await call.answer("Bu anlaşma zaten işleme alındı.", show_alert=True)
+        return
+
+    # Admine bildirim gönder
+    for aid in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                aid,
+                f"💳 <b>Alıcı Ödeme Yaptığını Bildirdi!</b>\n\n"
+                f"Anlaşma: <b>#{d['code']}</b>\n"
+                f"Alıcı: <code>{d['buyer_id']}</code>\n"
+                f"Tutar: <b>{d['amount']} {d['currency']}</b>\n"
+                f"Konu: {d['description']}\n\n"
+                f"Havaleyi kontrol edip onaylayın veya reddedin:",
+                reply_markup=ikb(
+                    [("✅ Ödeme Geldi — Onayla", f"adm_iban_ok:{did}")],
+                    [("❌ Ödeme Gelmedi — Reddet", f"adm_iban_no:{did}")]
+                )
+            )
+        except Exception:
+            pass
+
+    try:
+        await call.message.edit_text(
+            f"✅ <b>Bildiriminiz Alındı!</b>\n\n"
+            f"Anlaşma: <b>#{d['code']}</b>\n\n"
+            f"Admin havaleyi kontrol edip onaylayacak.\n"
+            f"⏳ Onay sonrası bildirim alacaksınız."
+        )
+    except Exception:
+        await call.message.answer("✅ Bildiriminiz admin'e iletildi.")
+    await call.answer()
 
 @user_r.callback_query(F.data.startswith("release:"))
 async def release_ask(call: CallbackQuery) -> None:
@@ -652,11 +705,21 @@ async def release_ok(call: CallbackQuery, bot: Bot) -> None:
 
 
 async def _start_seller_payout(bot: Bot, deal: Dict, net: float) -> None:
-    """Satıcıya ödeme yöntemi seçtir (IBAN veya Kripto)."""
-    coin_label = COINS.get(deal["method"]) if deal["method"] in COINS else None
+    """Satıcıya ödeme yöntemi seçtir. Kripto seçeneği sadece bakiye varsa çıkar."""
     btns = [[("🏦 IBAN / EFT ile al", f"seller_pay_method:{deal['id']}:iban")]]
-    if coin_label:
-        btns.append([(f"🔗 {coin_label} ile al", f"seller_pay_method:{deal['id']}:crypto")])
+
+    # Kripto seçeneği: anlaşma kripto ile yapıldıysa VE bakiye yeterliyse göster
+    if deal["method"] in COINS:
+        ca = await one("SELECT * FROM crypto_addr WHERE deal_id=?", (deal["id"],))
+        if ca:
+            bal = await get_balance(ca["coin"], ca["address"])
+            if bal >= net * 0.99:
+                coin_label = COINS.get(deal["method"], deal["method"])
+                btns.append([
+                    (f"🔗 {coin_label} ile al (bakiye: {bal:.4f})",
+                     f"seller_pay_method:{deal['id']}:crypto")
+                ])
+
     await bot.send_message(
         deal["seller_id"],
         f"🎉 <b>Alıcı Teslimi Onayladı!</b>\n\n"
@@ -977,42 +1040,85 @@ async def deal_confirm(call: CallbackQuery, state: FSMContext, bot: Bot) -> None
     # Karşı tarafı bilgilendir
     partner_role = "Satıcı" if data["role"] == "buyer" else "Alıcı"
     try:
-        await bot.send_message(
-            data["partner_id"],
-            f"📋 <b>Yeni Escrow Anlaşması!</b>\n\n"
-            f"Kod: <b>#{code}</b>\n"
-            f"Rolünüz: <b>{partner_role}</b>\n"
-            f"Tutar: <b>{data['amount']} {data['currency']}</b>\n"
-            f"Konu: {data['description']}\n\n"
-            f"Anlaşmayı görüntülemek için aşağıdaki butona tıklayın:",
-            reply_markup=ikb([("📋 Anlaşmayı Görüntüle", f"detail:{deal_id}")])
-        )
+        if method == "IBAN" and data["partner_id"] == buyer_id:
+            # Karşı taraf alıcıysa IBAN bilgisi + buton gönder
+            ii = await cfg_get("iban_info", {})
+            await bot.send_message(
+                data["partner_id"],
+                f"📋 <b>Yeni Escrow Anlaşması!</b>\n\n"
+                f"Kod: <b>#{code}</b> | Rolünüz: <b>{partner_role}</b>\n"
+                f"Tutar: <b>{data['amount']} {data['currency']}</b>\n"
+                f"Konu: {data['description']}\n\n"
+                f"🏦 Banka: <b>{ii.get('bank', '—')}</b>\n"
+                f"👤 Hesap Sahibi: <b>{ii.get('holder', '—')}</b>\n"
+                f"💳 IBAN: <code>{ii.get('iban', 'Henüz ayarlanmadı')}</code>\n\n"
+                f"💰 Gönderilecek: <b>{data['amount']} {data['currency']}</b>\n"
+                f"📝 Açıklama: <b>ESCROW-{code}</b>\n\n"
+                f"Havaleyi yaptıktan sonra butona basın:",
+                reply_markup=ikb([("✅ Ödemeyi Yaptım", f"buyer_paid:{deal_id}")])
+            )
+        else:
+            await bot.send_message(
+                data["partner_id"],
+                f"📋 <b>Yeni Escrow Anlaşması!</b>\n\n"
+                f"Kod: <b>#{code}</b>\n"
+                f"Rolünüz: <b>{partner_role}</b>\n"
+                f"Tutar: <b>{data['amount']} {data['currency']}</b>\n"
+                f"Konu: {data['description']}\n\n"
+                f"Anlaşmayı görüntülemek için aşağıdaki butona tıklayın:",
+                reply_markup=ikb([("📋 Anlaşmayı Görüntüle", f"detail:{deal_id}")])
+            )
     except Exception:
         pass
 
-    # Ödeme bilgisini oluştur
+    # Ödeme bilgisini sadece ALICIYA gönder
     if method == "IBAN":
         ii  = await cfg_get("iban_info", {})
-        txt = (
-            f"✅ <b>Anlaşma #{code} Oluşturuldu!</b>\n\n"
-            f"🏦 Banka: <b>{ii.get('bank', '—')}</b>\n"
-            f"👤 Hesap Sahibi: <b>{ii.get('holder', '—')}</b>\n"
-            f"💳 IBAN: <code>{ii.get('iban', 'Henüz ayarlanmadı')}</code>\n\n"
-            f"💰 Gönderilecek Tutar: <b>{data['amount']} {data['currency']}</b>\n"
-            f"📝 Açıklama: <b>ESCROW-{code}</b>\n\n"
-            f"⚠️ Havaleyi yaptıktan sonra admin onaylayacak."
-        )
+        # Alıcı ise IBAN bilgisi + "Ödeme Yaptım" butonu
+        if uid == buyer_id:
+            await call.message.answer(
+                f"✅ <b>Anlaşma #{code} Oluşturuldu!</b>\n\n"
+                f"🏦 Banka: <b>{ii.get('bank', '—')}</b>\n"
+                f"👤 Hesap Sahibi: <b>{ii.get('holder', '—')}</b>\n"
+                f"💳 IBAN: <code>{ii.get('iban', 'Henüz ayarlanmadı')}</code>\n\n"
+                f"💰 Gönderilecek Tutar: <b>{data['amount']} {data['currency']}</b>\n"
+                f"📝 Açıklama: <b>ESCROW-{code}</b>\n\n"
+                f"⚠️ Havaleyi yaptıktan sonra aşağıdaki butona basın:",
+                reply_markup=ikb(
+                    [("✅ Ödemeyi Yaptım", f"buyer_paid:{deal_id}")],
+                )
+            )
+        else:
+            # Satıcı oluşturdu — sadece onay mesajı
+            await call.message.answer(
+                f"✅ <b>Anlaşma #{code} Oluşturuldu!</b>\n\n"
+                f"Alıcı IBAN bilgilerini alacak ve ödeme yapacak.\n"
+                f"Ödeme admin tarafından onaylandıktan sonra bildirim alacaksınız.",
+                reply_markup=main_kb(uid)
+            )
+            await call.answer()
+            return
     else:
         ca  = await one("SELECT * FROM crypto_addr WHERE deal_id=?", (deal_id,))
-        txt = (
-            f"✅ <b>Anlaşma #{code} Oluşturuldu!</b>\n\n"
-            f"🔗 {COINS.get(method, method)} Ödeme Adresi:\n"
-            f"<code>{ca['address']}</code>\n\n"
-            f"💰 Gönderilecek: <b>{data['amount']} {method}</b>\n"
-            f"⏰ Ödeme süresi: {PAYMENT_HOURS} saat\n\n"
-            f"✅ Ödeme otomatik kontrol edilir."
-        )
-    await call.message.answer(txt, reply_markup=main_kb(uid))
+        if uid == buyer_id:
+            await call.message.answer(
+                f"✅ <b>Anlaşma #{code} Oluşturuldu!</b>\n\n"
+                f"🔗 {COINS.get(method, method)} Ödeme Adresi:\n"
+                f"<code>{ca['address']}</code>\n\n"
+                f"💰 Gönderilecek: <b>{data['amount']} {method}</b>\n"
+                f"⏰ Ödeme süresi: {PAYMENT_HOURS} saat\n\n"
+                f"✅ Ödeme otomatik kontrol edilir.",
+            )
+        else:
+            await call.message.answer(
+                f"✅ <b>Anlaşma #{code} Oluşturuldu!</b>\n\n"
+                f"Alıcı kripto ödeme yapacak, sistem otomatik kontrol edecek.\n"
+                f"Ödeme alındıktan sonra bildirim alacaksınız.",
+                reply_markup=main_kb(uid)
+            )
+            await call.answer()
+            return
+    await call.message.answer("Ana menüye dönmek için:", reply_markup=main_kb(uid))
     await call.answer()
 
 # ═══════════════════════════════════════════════════════════════════
