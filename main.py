@@ -34,7 +34,7 @@ from aiogram.types import (
 # ═══════════════════════════════════════════════════════════════════
 #  YAPILANDIRMA  ← BURADAN DEĞİŞTİR
 # ═══════════════════════════════════════════════════════════════════
-BOT_TOKEN     = os.getenv("BOT_TOKEN",    "8698709943:AAE3ZVzjyMSE9elndQCJo-9dVTWsgG41ABY")
+BOT_TOKEN     = os.getenv("BOT_TOKEN",    "8690930931:AAGPtbIoIy3mZnHzCS-o7dnc8LKTL4zmiYU")
 ADMIN_IDS     = [int(x) for x in os.getenv("ADMIN_IDS", "7672180974").split(",") if x.strip()]
 DB_PATH       = os.getenv("DB_PATH",      "escrow.db")
 FEE_PERCENT   = float(os.getenv("FEE_PERCENT",   "2.0"))
