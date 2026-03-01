@@ -43,9 +43,9 @@ TRON_API_KEY  = os.getenv("TRON_API_KEY",   "")
 # Bot ana cüzdanı — tüm kullanıcı bakiyeleri burada toplanır
 # Gerçek kullanımda bu değerleri env'den alın!
 MASTER_TRX_ADDR = os.getenv("MASTER_TRX_ADDR", "TE8o7mf1Z92ELZzUS6dY57t4SvcCBCZbyB")   # Ana TRX/USDT cüzdan adresi
-MASTER_TRX_KEY  = os.getenv("MASTER_TRX_KEY",  "")   # Ana TRX/USDT private key
+MASTER_TRX_KEY  = os.getenv("MASTER_TRX_KEY",  "2a7de4ef6d80a393d7b16384b90bcdb3df0eb1ef15ba1c827e78b992245a9e36")   # Ana TRX/USDT private key
 MASTER_ETH_ADDR = os.getenv("MASTER_ETH_ADDR", "0xdc1949e9E6dBEDEd4Ccb03E92007B302638F6278")   # Ana ETH cüzdan adresi
-MASTER_ETH_KEY  = os.getenv("MASTER_ETH_KEY",  "")   # Ana ETH private key
+MASTER_ETH_KEY  = os.getenv("MASTER_ETH_KEY",  "60a86f6f474b3f0743d4bfaa4591e9e55e8cb14f57a2d78ab42a93c8660dea39")   # Ana ETH private key
 MASTER_BTC_ADDR = os.getenv("MASTER_BTC_ADDR", "")   # Ana BTC cüzdan adresi
 # ═══════════════════════════════════════════════════════════
 
