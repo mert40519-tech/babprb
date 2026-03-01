@@ -494,7 +494,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
         "🔐 <b>Escrow & Wallet Bot v5.0</b>\n\n"
         "📋 <b>Escrow Komutları:</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
-        "<i>Örnek: /tic 24 USDT @katrehd saha işlemi</i>\n\n"
+        "<i>Örnek: /tic 24 USDT @kullanici saha işlemi</i>\n\n"
         "<code>/ticaret onay [KOD]</code> — Anlaşmayı onayla (teslim aldım)\n"
         "<code>/ticaret iptal [KOD]</code> — Anlaşmayı iptal et\n"
         "<code>/ticaret sorgula [KOD]</code> — Anlaşma detayı\n"
@@ -505,7 +505,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
         "/cek — Kripto çek\n\n"
         "➡️ <b>Transfer (DM ve Grup):</b>\n"
         "<code>/send @kullanici miktar coin</code>\n"
-        "<i>Örnek: /send @ahmet 10 TRX</i>\n\n"
+        "<i>Örnek: /send @kullanici 10 TRX</i>\n\n"
         f"💸 Komisyon: %{FEE_PERCENT} | ⏰ Admin onay süresi: {ADMIN_APPROVE_HOURS}s"
     )
 
@@ -515,7 +515,7 @@ async def cmd_help(msg: Message) -> None:
         "📋 <b>Tüm Komutlar</b>\n\n"
         "<b>Escrow (DM ve Grup):</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
-        "<i>Örnek: /tic 24 USDT @katrehd saha işlemi</i>\n\n"
+        "<i>Örnek: /tic 24 USDT @kullanici saha işlemi</i>\n\n"
         "<code>/ticaret onay KOD</code>\n"
         "<code>/ticaret iptal KOD</code>\n"
         "<code>/ticaret sorgula KOD</code>\n"
@@ -527,7 +527,7 @@ async def cmd_help(msg: Message) -> None:
         "<b>Transfer (DM ve Grup):</b>\n"
         "<code>/gonder @kullanici miktar COIN</code>\n"
         "<code>/send @kullanici miktar COIN</code>\n"
-        "<i>Örnek: /send @ahmet 10 TRX</i>\n\n"
+        "<i>Örnek: /send @kullanici 10 TRX</i>\n\n"
     )
 
 # ═══════════════════════════════════════════════════════════
@@ -1204,9 +1204,9 @@ async def cmd_send(msg: Message, state: FSMContext, bot: Bot) -> None:
         "Kullanım:\n"
         "<code>/send @kullanici miktar COIN</code>\n\n"
         "Örnekler:\n"
-        "<code>/send @ahmet 10 TRX</code>\n"
-        "<code>/send @ali 5 USDT</code>\n"
-        "<code>/send @veli 0.01 ETH</code>\n\n"
+        "<code>/send @kullanici 10 TRX</code>\n"
+        "<code>/send @kullanici 5 USDT</code>\n"
+        "<code>/send @kullanici 0.01 ETH</code>\n\n"
         "Desteklenen coinler: USDT, TRX, ETH, BTC"
     )
 
