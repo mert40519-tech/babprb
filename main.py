@@ -491,7 +491,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
         await msg.answer("🚫 Hesabınız yasaklandı.")
         return
     await msg.answer(
-        "🔐 <b>Escrow & Wallet Bot v5.0</b>\n\n"
+        "🔐 <b>Ticaret & Wallet Bot v5.0</b>\n\n"
         "📋 <b>Escrow Komutları:</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
         "<i>Örnek: /tic 24 USDT @kullanici saha işlemi</i>\n\n"
@@ -513,7 +513,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
 async def cmd_help(msg: Message) -> None:
     await msg.answer(
         "📋 <b>Tüm Komutlar</b>\n\n"
-        "<b>Escrow (DM ve Grup):</b>\n"
+        "<b>Ticaret (DM ve Grup):</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
         "<i>Örnek: /tic 24 USDT @kullanici saha işlemi</i>\n\n"
         "<code>/ticaret onay KOD</code>\n"
