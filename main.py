@@ -33,7 +33,7 @@ from aiogram.types import (
 #  YAPILANDIRMA
 # ═══════════════════════════════════════════════════════════
 BOT_TOKEN     = os.getenv("BOT_TOKEN",      "8681267503:AAG7UUBdfVnyohkVTJr57Gn1Ke_qBEclTGY")
-ADMIN_IDS     = [int(x) for x in os.getenv("ADMIN_IDS", "7672180974").split(",") if x.strip()]
+ADMIN_IDS     = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 DB_PATH       = os.getenv("DB_PATH",        "escrow.db")
 FEE_PERCENT   = float(os.getenv("FEE_PERCENT",    "4.0"))   # %4 komisyon
 PAYMENT_HOURS = int(os.getenv("PAYMENT_HOURS",    "24"))
@@ -472,9 +472,12 @@ class SendFSM(StatesGroup):
     confirm = State()
 
 class AdminFSM(StatesGroup):
-    send_to   = State()
-    send_amt  = State()
-    broadcast = State()
+    send_to      = State()
+    send_amt     = State()
+    broadcast    = State()
+    add_bal_uid  = State()   # admin bakiye yükleme: hedef kullanıcı
+    add_bal_coin = State()   # coin seçimi
+    add_bal_amt  = State()   # miktar
 
 # ═══════════════════════════════════════════════════════════
 #  ROUTERLAR
@@ -499,7 +502,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
         "🔐 <b>Escrow & Wallet Bot v5.0</b>\n\n"
         "📋 <b>Escrow Komutları:</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
-        "<i>Örnek: /tic 24 USDT @sibersubeden saha işlemi</i>\n\n"
+        "<i>Örnek: /tic 24 USDT @katrehd saha işlemi</i>\n\n"
         "<code>/ticaret onay [KOD]</code> — Anlaşmayı onayla (teslim aldım)\n"
         "<code>/ticaret iptal [KOD]</code> — Anlaşmayı iptal et\n"
         "<code>/ticaret sorgula [KOD]</code> — Anlaşma detayı\n"
@@ -507,8 +510,10 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
         "💰 <b>Cüzdan (sadece DM):</b>\n"
         "/bakiye — Bakiyeni görüntüle\n"
         "/yukle — Kripto bakiye yükle\n"
-        "/cek — Kripto çek\n"
-        "/gonder @kullanici miktar coin\n\n"
+        "/cek — Kripto çek\n\n"
+        "➡️ <b>Transfer (DM ve Grup):</b>\n"
+        "<code>/tr @kullanici miktar coin</code>\n"
+        "<i>Örnek: /tr @ahmet 10 TRX</i>\n\n"
         f"💸 Komisyon: %{FEE_PERCENT} | ⏰ Admin onay süresi: {ADMIN_APPROVE_HOURS}s"
     )
 
@@ -518,7 +523,7 @@ async def cmd_help(msg: Message) -> None:
         "📋 <b>Tüm Komutlar</b>\n\n"
         "<b>Escrow (DM ve Grup):</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
-        "<i>Örnek: /tic 24 USDT @sibersubeden saha işlemi</i>\n\n"
+        "<i>Örnek: /tic 24 USDT @katrehd saha işlemi</i>\n\n"
         "<code>/ticaret onay KOD</code>\n"
         "<code>/ticaret iptal KOD</code>\n"
         "<code>/ticaret sorgula KOD</code>\n"
@@ -526,8 +531,11 @@ async def cmd_help(msg: Message) -> None:
         "<b>Cüzdan (sadece DM):</b>\n"
         "/bakiye — Bakiyeni gör\n"
         "/yukle — Kripto yükle\n"
-        "/cek — Kripto çek\n"
-        "/gonder @kullanici miktar COIN\n\n"
+        "/cek — Kripto çek\n\n"
+        "<b>Transfer (DM ve Grup):</b>\n"
+        "<code>/tr @kullanici miktar COIN</code>\n"
+        "<code>/transfer @kullanici miktar COIN</code>\n"
+        "<i>Örnek: /tr @ahmet 10 TRX</i>\n\n"
     )
 
 # ═══════════════════════════════════════════════════════════
@@ -1152,7 +1160,11 @@ async def wallet_history(call: CallbackQuery) -> None:
 # ═══════════════════════════════════════════════════════════
 
 @user_r.message(Command("send", "gonder"))
-async def cmd_send(msg: Message, state: FSMContext) -> None:
+async def cmd_send(msg: Message, state: FSMContext, bot: Bot) -> None:
+    """
+    Kullanım: /send @kullanici 10 TRX
+              /gonder @kullanici 5 USDT
+    """
     await ensure_user(msg.from_user)
     uid = msg.from_user.id
     u   = await one("SELECT is_banned FROM users WHERE user_id=?", (uid,))
@@ -1160,7 +1172,7 @@ async def cmd_send(msg: Message, state: FSMContext) -> None:
         await msg.answer("🚫 Hesabınız yasaklandı.")
         return
 
-    args    = msg.text.split()[1:] if msg.text else []
+    text    = msg.text or ""
     mention = msg.entities and next(
         (e for e in msg.entities if e.type in ("mention", "text_mention")), None
     )
@@ -1172,49 +1184,54 @@ async def cmd_send(msg: Message, state: FSMContext) -> None:
         if mention.type == "text_mention":
             target_id   = mention.user.id
             target_name = mention.user.full_name
+            await ensure_user(mention.user)
         elif mention.type == "mention":
-            uname = msg.text[mention.offset+1:mention.offset+mention.length]
-            row   = await one("SELECT user_id, full_name FROM users WHERE username=?", (uname,))
+            uname = text[mention.offset+1:mention.offset+mention.length]
+            row   = await one("SELECT user_id, full_name, username FROM users WHERE username=?", (uname,))
             if row:
                 target_id   = row["user_id"]
-                target_name = row["full_name"] or uname
+                target_name = f"@{uname}"
+            else:
+                await msg.answer(
+                    f"❌ @{uname} bulunamadı.\n"
+                    "Karşı tarafın bota /start yazması gerekiyor."
+                )
+                return
 
+    # Miktar ve coin parse (mention hariç tüm args)
+    args = text.split()[1:]
     amount = None
     coin   = None
     for a in args:
-        try:
-            amount = float(a.replace(",","."))
-        except ValueError:
+        if a.startswith("@"):
+            continue
+        if amount is None:
+            try:
+                amount = float(a.replace(",", "."))
+                continue
+            except ValueError:
+                pass
+        if coin is None:
             nc = normalize_coin(a)
-            if nc in ("USDT_TRC20","TRX","ETH","BTC") and not a.startswith("@"):
+            if nc in ("USDT_TRC20", "TRX", "ETH", "BTC"):
                 coin = nc
+                continue
 
     if target_id and amount and coin:
-        await _do_send(msg, uid, target_id, target_name or str(target_id), coin, amount)
+        await _do_send(msg, uid, target_id, target_name or str(target_id), coin, amount, bot)
         return
 
-    await state.set_state(SendFSM.target)
-    if target_id:
-        await state.update_data(target_id=target_id, target_name=target_name or str(target_id))
-        await state.set_state(SendFSM.coin)
-        bals = await all_balances(uid)
-        if not bals:
-            await state.clear()
-            await msg.answer("💸 Bakiyeniz yok. Önce /yukle ile yükleyin.")
-            return
-        btns = [(f"{COIN_EMOJI.get(c,'💰')} {coin_display(c)} ({v:.4f})", f"snd_coin:{c}") for c, v in bals.items()]
-        rows = [btns[i:i+2] for i in range(0, len(btns), 2)]
-        await msg.answer(
-            f"➡️ <b>Gönder</b> — Alıcı: <b>{target_name or target_id}</b>\n\nHangi coini göndermek istiyorsunuz?",
-            reply_markup=ikb(*rows)
-        )
-    else:
-        await msg.answer(
-            "➡️ <b>Kripto Gönder</b>\n\n"
-            "Kime göndermek istiyorsunuz?\n"
-            "Kullanıcıyı <b>etiketleyin</b> ya da <b>Telegram ID</b> yazın:\n"
-            "<i>İptal için: iptal</i>"
-        )
+    # Eksik parametre — kullanım göster
+    await msg.answer(
+        "➡️ <b>Kripto Gönder</b>\n\n"
+        "Kullanım:\n"
+        "<code>/send @kullanici miktar COIN</code>\n\n"
+        "Örnekler:\n"
+        "<code>/send @ahmet 10 TRX</code>\n"
+        "<code>/send @ali 5 USDT</code>\n"
+        "<code>/send @veli 0.01 ETH</code>\n\n"
+        "Desteklenen coinler: USDT, TRX, ETH, BTC"
+    )
 
 @user_r.message(StateFilter(SendFSM.target))
 async def snd_target(msg: Message, state: FSMContext) -> None:
@@ -1363,9 +1380,14 @@ async def admin_cmd(msg: Message, state: FSMContext) -> None:
     await msg.answer("👑 <b>Admin Paneli</b>", reply_markup=ikb(
         [("📊 Anlaşmalar",      "adm:deals"),     ("⚠️ Disputelar",   "adm:disputes")],
         [("💎 Kullanıcı Bak.",  "adm:wallets"),   ("💸 Fon Gönder",   "adm:send")],
-        [("👥 Kullanıcılar",    "adm:users"),     ("📢 Duyuru",        "adm:broadcast")],
-        [("📈 İstatistikler",   "adm:stats")]
+        [("➕ Bakiye Yükle",    "adm:add_bal"),   ("👥 Kullanıcılar", "adm:users")],
+        [("📢 Duyuru",          "adm:broadcast"), ("📈 İstatistikler","adm:stats")]
     ))
+    await msg.answer(
+        "💡 <b>Hızlı Komutlar:</b>\n"
+        "<code>/addbal @kullanici miktar coin</code>\n"
+        "<i>Örnek: /addbal @ahmet 50 USDT</i>"
+    )
 
 @admin_r.callback_query(F.data.startswith("adm:"))
 async def admin_cb(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
@@ -1444,6 +1466,13 @@ async def admin_cb(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     elif action == "send":
         await state.set_state(AdminFSM.send_to)
         await call.message.answer("💸 Hedef adres:")
+
+    elif action == "add_bal":
+        await state.set_state(AdminFSM.add_bal_uid)
+        await call.message.answer(
+            "➕ <b>Kullanıcıya Bakiye Yükle</b>\n\n"
+            "Kullanıcının <b>Telegram ID</b>'sini veya <b>@kullanıcıadı</b>'nı girin:"
+        )
 
     await call.answer()
 
@@ -1633,6 +1662,105 @@ async def adm_broadcast(msg: Message, state: FSMContext, bot: Bot) -> None:
         await asyncio.sleep(0.05)
     await msg.answer(f"📢 Tamamlandı! ✅{ok} ❌{fail}")
 
+# ─── Admin Bakiye Yükleme FSM ─────────────────────────────
+
+@admin_r.message(StateFilter(AdminFSM.add_bal_uid))
+async def adm_add_bal_uid(msg: Message, state: FSMContext) -> None:
+    if not is_admin(msg.from_user.id): return
+    text = msg.text.strip()
+    if text.lower() == "iptal":
+        await state.clear(); await msg.answer("❌ İptal."); return
+
+    target_id = None
+    # mention kontrolü
+    mention = msg.entities and next(
+        (e for e in msg.entities if e.type in ("mention", "text_mention")), None
+    )
+    if mention:
+        if mention.type == "text_mention":
+            target_id = mention.user.id
+        elif mention.type == "mention":
+            uname = text[mention.offset+1:mention.offset+mention.length]
+            row   = await one("SELECT user_id FROM users WHERE username=?", (uname,))
+            if row: target_id = row["user_id"]
+    elif text.startswith("@"):
+        row = await one("SELECT user_id FROM users WHERE username=?", (text[1:],))
+        if row: target_id = row["user_id"]
+    else:
+        try: target_id = int(text)
+        except ValueError: pass
+
+    if not target_id:
+        await msg.answer("❌ Kullanıcı bulunamadı. ID veya @kullanıcıadı girin:"); return
+
+    # Kullanıcı var mı kontrol et, yoksa oluştur
+    u = await one("SELECT user_id FROM users WHERE user_id=?", (target_id,))
+    if not u:
+        await exe("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (target_id,))
+
+    await state.update_data(target_id=target_id)
+    await state.set_state(AdminFSM.add_bal_coin)
+    await msg.answer(
+        f"✅ Kullanıcı: <code>{target_id}</code>\n\n"
+        f"Hangi coinden yüklemek istiyorsunuz?",
+        reply_markup=ikb(
+            [("💎 USDT TRC20", "adm_bal_coin:USDT_TRC20"), ("⚡ TRX", "adm_bal_coin:TRX")],
+            [("🔷 ETH",        "adm_bal_coin:ETH"),         ("₿ BTC",  "adm_bal_coin:BTC")]
+        )
+    )
+
+@admin_r.callback_query(F.data.startswith("adm_bal_coin:"), StateFilter(AdminFSM.add_bal_coin))
+async def adm_add_bal_coin(call: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(call.from_user.id): await call.answer("🚫", show_alert=True); return
+    coin = call.data.split(":")[1]
+    await state.update_data(coin=coin)
+    await state.set_state(AdminFSM.add_bal_amt)
+    data = await state.get_data()
+    await call.message.edit_text(
+        f"✅ Coin: <b>{coin_display(coin)}</b>\n"
+        f"Kullanıcı: <code>{data['target_id']}</code>\n\n"
+        f"Yüklenecek miktarı girin:"
+    )
+    await call.answer()
+
+@admin_r.message(StateFilter(AdminFSM.add_bal_amt))
+async def adm_add_bal_amt(msg: Message, state: FSMContext, bot: Bot) -> None:
+    if not is_admin(msg.from_user.id): return
+    if msg.text.strip().lower() == "iptal":
+        await state.clear(); await msg.answer("❌ İptal."); return
+    try:
+        amount = float(msg.text.strip().replace(",", "."))
+        if amount <= 0: raise ValueError
+    except ValueError:
+        await msg.answer("❌ Geçersiz miktar. Pozitif sayı girin:"); return
+
+    data = await state.get_data()
+    await state.clear()
+
+    target_id = data["target_id"]
+    coin      = data["coin"]
+
+    new_bal = await add_balance(target_id, coin, amount)
+    await log_wallet_tx(target_id, "deposit", coin, amount, note="Admin tarafından yüklendi")
+
+    await msg.answer(
+        f"✅ <b>Bakiye Yüklendi!</b>\n\n"
+        f"👤 Kullanıcı: <code>{target_id}</code>\n"
+        f"💰 Yüklenen: <b>+{amount} {coin_display(coin)}</b>\n"
+        f"📊 Yeni bakiye: <b>{new_bal:.6f} {coin_display(coin)}</b>"
+    )
+
+    try:
+        await bot.send_message(
+            target_id,
+            f"📥 <b>Bakiyenize Yükleme Yapıldı!</b>\n\n"
+            f"💰 +{amount} <b>{coin_display(coin)}</b>\n"
+            f"📊 Yeni bakiye: <b>{new_bal:.6f} {coin_display(coin)}</b>\n\n"
+            f"/bakiye ile görüntüleyebilirsiniz."
+        )
+    except Exception:
+        pass
+
 @admin_r.callback_query(F.data.startswith("adm_ban:"))
 async def adm_ban(call: CallbackQuery, bot: Bot) -> None:
     if not is_admin(call.from_user.id): await call.answer("🚫",show_alert=True); return
@@ -1650,6 +1778,99 @@ async def adm_unban(call: CallbackQuery, bot: Bot) -> None:
     try: await bot.send_message(uid, "✅ Yasağınız kaldırıldı.")
     except: pass
     await call.answer(f"✅ {uid} yasak kaldırıldı", show_alert=True)
+
+# ─── /addbal — Hızlı admin bakiye yükleme ────────────────
+# Kullanım: /addbal @kullanici 50 USDT
+#           /addbal 123456789 0.5 ETH
+
+@admin_r.message(Command("addbal"))
+async def cmd_addbal(msg: Message, bot: Bot) -> None:
+    if not is_admin(msg.from_user.id):
+        await msg.answer("🚫 Yetkisiz!")
+        return
+
+    text  = msg.text or ""
+    parts = text.split()
+
+    # Argümanları topla
+    mention = msg.entities and next(
+        (e for e in msg.entities if e.type in ("mention", "text_mention")), None
+    )
+
+    target_id = None
+    amount    = None
+    coin      = None
+
+    if mention:
+        if mention.type == "text_mention":
+            target_id = mention.user.id
+            await ensure_user(mention.user)
+        elif mention.type == "mention":
+            uname = text[mention.offset+1:mention.offset+mention.length]
+            row   = await one("SELECT user_id FROM users WHERE username=?", (uname,))
+            if row:
+                target_id = row["user_id"]
+
+    # mention dışı argümanlar
+    non_mention = [p for p in parts[1:] if not p.startswith("@")]
+    for p in non_mention:
+        if target_id is None:
+            try:
+                target_id = int(p)
+                continue
+            except ValueError:
+                pass
+        if amount is None:
+            try:
+                amount = float(p.replace(",", "."))
+                continue
+            except ValueError:
+                pass
+        if coin is None:
+            nc = normalize_coin(p)
+            if nc in ("USDT_TRC20", "TRX", "ETH", "BTC"):
+                coin = nc
+
+    if not (target_id and amount and coin):
+        await msg.answer(
+            "❌ <b>Hatalı kullanım!</b>\n\n"
+            "Format: <code>/addbal @kullanici miktar coin</code>\n"
+            "Veya:   <code>/addbal TelegramID miktar coin</code>\n\n"
+            "Örnek:\n"
+            "<code>/addbal @ahmet 50 USDT</code>\n"
+            "<code>/addbal 123456789 0.5 ETH</code>"
+        )
+        return
+
+    if amount <= 0:
+        await msg.answer("❌ Miktar 0'dan büyük olmalı.")
+        return
+
+    # Kullanıcı yoksa kaydet
+    u = await one("SELECT user_id FROM users WHERE user_id=?", (target_id,))
+    if not u:
+        await exe("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (target_id,))
+
+    new_bal = await add_balance(target_id, coin, amount)
+    await log_wallet_tx(target_id, "deposit", coin, amount, note=f"Admin yükledi ({msg.from_user.id})")
+
+    await msg.answer(
+        f"✅ <b>Bakiye Yüklendi!</b>\n\n"
+        f"👤 Kullanıcı: <code>{target_id}</code>\n"
+        f"💰 Yüklenen: <b>+{amount} {coin_display(coin)}</b>\n"
+        f"📊 Yeni bakiye: <b>{new_bal:.6f} {coin_display(coin)}</b>"
+    )
+
+    try:
+        await bot.send_message(
+            target_id,
+            f"📥 <b>Bakiyenize Yükleme Yapıldı!</b>\n\n"
+            f"💰 +{amount} <b>{coin_display(coin)}</b>\n"
+            f"📊 Yeni bakiye: <b>{new_bal:.6f} {coin_display(coin)}</b>\n\n"
+            f"/bakiye ile görüntüleyebilirsiniz."
+        )
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════════════════
 #  MONİTÖR — Bakiye yükleme
