@@ -445,8 +445,6 @@ async def format_deal_message(d: Dict) -> str:
         f"  ▪️ İptal etmek için <code>/ticaret iptal {d['code']}</code> komutları kullanılabilir.\n\n"
         f"  ▪️ Bu anlaşmayı tekrar görüntülemek için  <code>/ticaretlerim</code> veya "
         f"<code>/ticaret sorgula {d['code']}</code> komutları kullanabilir.\n\n"
-        f"  ▪️ {admin_dl} tarihinden itibaren bu gruptaki yöneticiler "
-        f"{buyer_name} yerine bu ticareti onaylayabilir."
     )
 
 # ═══════════════════════════════════════════════════════════
