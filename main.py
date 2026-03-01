@@ -528,8 +528,6 @@ async def cmd_help(msg: Message) -> None:
         "/yukle — Kripto yükle\n"
         "/cek — Kripto çek\n"
         "/gonder @kullanici miktar COIN\n\n"
-        "<b>Admin:</b>\n"
-        "/admin — Admin paneli"
     )
 
 # ═══════════════════════════════════════════════════════════
