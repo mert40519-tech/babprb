@@ -445,6 +445,8 @@ async def format_deal_message(d: Dict) -> str:
         f"  ▪️ İptal etmek için <code>/ticaret iptal {d['code']}</code> komutları kullanılabilir.\n\n"
         f"  ▪️ Bu anlaşmayı tekrar görüntülemek için  <code>/ticaretlerim</code> veya "
         f"<code>/ticaret sorgula {d['code']}</code> komutları kullanabilir.\n\n"
+        f"  ▪️ {admin_dl} tarihinden itibaren bu gruptaki yöneticiler "
+        f"{buyer_name} yerine bu ticareti onaylayabilir."
     )
 
 # ═══════════════════════════════════════════════════════════
@@ -527,7 +529,7 @@ async def cmd_help(msg: Message) -> None:
         "<b>Transfer (DM ve Grup):</b>\n"
         "<code>/gonder @kullanici miktar COIN</code>\n"
         "<code>/send @kullanici miktar COIN</code>\n"
-        "<i>Örnek: /send @kullanici 10 TRX</i>\n\n"
+        "<i>Örnek: /send @kullamici 10 TRX</i>\n\n"
     )
 
 # ═══════════════════════════════════════════════════════════
@@ -614,8 +616,8 @@ async def cmd_tic(msg: Message, state: FSMContext, bot: Bot) -> None:
             "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n\n"
             "Desteklenen coinler: USDT, TRX, ETH, BTC\n\n"
             "Örnek:\n"
-            "<code>/tic 24 USDT @sibersubeden saha işlemi</code>\n"
-            "<code>/tic 0.5 ETH @ahmet logo tasarımı</code>"
+            "<code>/tic 24 USDT @kullanici saha işlemi</code>\n"
+            "<code>/tic 0.5 ETH @kullanici logo tasarımı</code>"
         )
         return
 
@@ -1841,6 +1843,59 @@ async def cmd_addbal(msg: Message, bot: Bot) -> None:
 #  MONİTÖR — Bakiye yükleme
 # ═══════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════
+#  SWEEP — Kullanıcı adreslerinden master'a otomatik transfer
+# ═══════════════════════════════════════════════════════════
+
+# TRX işlem ücreti için adreste bırakılacak minimum miktar
+TRX_FEE_RESERVE  = float(os.getenv("TRX_FEE_RESERVE",  "2.0"))   # 2 TRX gas için
+ETH_FEE_RESERVE  = float(os.getenv("ETH_FEE_RESERVE",  "0.002")) # 0.002 ETH gas için
+
+async def sweep_trx(addr: str, privkey: str, amount: float) -> Optional[str]:
+    """TRX bakiyesini master adrese gönder (gas rezervi bırak)"""
+    sweep_amount = amount - TRX_FEE_RESERVE
+    if sweep_amount <= 0.001:
+        return None
+    return await send_tron(addr, privkey, MASTER_TRX_ADDR, sweep_amount, "TRX")
+
+async def sweep_usdt(addr: str, privkey: str, amount: float) -> Optional[str]:
+    """USDT TRC20 bakiyesini master adrese gönder"""
+    if amount <= 0.01:
+        return None
+    # USDT göndermek için TRX gas gerekir, önce TRX bakiyesi kontrol et
+    trx_bal = await chain_bal_trx(addr)
+    if trx_bal < TRX_FEE_RESERVE:
+        # Gas için master'dan TRX gönder
+        log.info("🔋 %s için gas TRX gönderiliyor...", addr)
+        gas_tx = await send_tron(MASTER_TRX_ADDR, MASTER_TRX_KEY, addr, TRX_FEE_RESERVE, "TRX")
+        if gas_tx:
+            await asyncio.sleep(5)  # zincirin işlemesi için bekle
+        else:
+            log.warning("Gas TRX gönderilemedi: %s", addr)
+            return None
+    return await send_tron(addr, privkey, MASTER_TRX_ADDR, amount, "USDT_TRC20")
+
+async def sweep_eth(addr: str, privkey: str, amount: float) -> Optional[str]:
+    """ETH bakiyesini master adrese gönder (gas rezervi bırak)"""
+    sweep_amount = amount - ETH_FEE_RESERVE
+    if sweep_amount <= 0.0001:
+        return None
+    return await send_eth(privkey, MASTER_ETH_ADDR, sweep_amount)
+
+async def sweep_to_master(coin: str, addr: str, privkey: str, amount: float) -> Optional[str]:
+    """Coin türüne göre uygun sweep fonksiyonunu çağır"""
+    c = normalize_coin(coin)
+    try:
+        if c == "TRX":
+            return await sweep_trx(addr, privkey, amount)
+        if c == "USDT_TRC20":
+            return await sweep_usdt(addr, privkey, amount)
+        if c == "ETH":
+            return await sweep_eth(addr, privkey, amount)
+    except Exception as e:
+        log.error("Sweep hatası %s %s: %s", coin, addr, e)
+    return None
+
 async def deposit_monitor(bot: Bot) -> None:
     log.info("💰 Deposit monitörü başlatıldı")
     while True:
@@ -1857,6 +1912,8 @@ async def deposit_monitor(bot: Bot) -> None:
                         total = await add_balance(a["user_id"], a["coin"], new_amount)
                         await log_wallet_tx(a["user_id"], "deposit", a["coin"], new_amount)
                         log.info("💰 Deposit: user=%s +%s %s", a["user_id"], new_amount, a["coin"])
+
+                        # ── Kullanıcıya bildir ──
                         try:
                             await bot.send_message(
                                 a["user_id"],
@@ -1866,11 +1923,44 @@ async def deposit_monitor(bot: Bot) -> None:
                                 f"/bakiye ile görüntüleyebilirsiniz."
                             )
                         except Exception: pass
+
+                        # ── Master cüzdana sweep et ──
+                        asyncio.create_task(
+                            _do_sweep(bot, a["coin"], a["address"], a["privkey"], bal, a["id"])
+                        )
+
                 except Exception as e:
                     log.warning("Deposit monitor hata: %s", e)
         except Exception as e:
             log.error("Deposit monitor kritik: %s", e)
         await asyncio.sleep(MONITOR_SEC)
+
+
+async def _do_sweep(bot: Bot, coin: str, addr: str, privkey: str, amount: float, dep_id: int) -> None:
+    """Arka planda sweep işlemi yap ve logla"""
+    await asyncio.sleep(10)  # zincir onayı için kısa bekle
+    log.info("🔄 Sweep başlıyor: %s %s → master", amount, coin)
+    tx = await sweep_to_master(coin, addr, privkey, amount)
+    if tx:
+        log.info("✅ Sweep OK: %s → master | TX: %s", coin, tx)
+        await exe(
+            "INSERT INTO wallet_tx(user_id,type,coin,amount,tx_hash,note) VALUES(?,?,?,?,?,?)",
+            (0, "sweep", normalize_coin(coin), amount, tx, f"dep_id:{dep_id} → master")
+        )
+        # Adminlere bilgi ver (opsiyonel, sessiz hata)
+        for aid in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    aid,
+                    f"🔄 <b>Sweep Tamamlandı</b>\n"
+                    f"💰 {amount:.6f} {coin_display(coin)}\n"
+                    f"📬 Master: <code>{'MASTER_TRX_ADDR' if normalize_coin(coin) in ('TRX','USDT_TRC20') else 'MASTER_ETH_ADDR'}</code>\n"
+                    f"🔗 TX: <code>{tx}</code>"
+                )
+            except Exception:
+                pass
+    else:
+        log.warning("⚠️ Sweep başarısız: %s %s (miktar çok küçük veya gas yetersiz)", coin, addr)
 
 # ═══════════════════════════════════════════════════════════
 #  MAIN
