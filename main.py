@@ -32,8 +32,8 @@ from aiogram.types import (
 # ═══════════════════════════════════════════════════════════
 #  YAPILANDIRMA
 # ═══════════════════════════════════════════════════════════
-BOT_TOKEN     = os.getenv("BOT_TOKEN",      "8388525270:AAFQHCDvHD53uPSDBD1N11sjOX9xFT8RLj4")
-ADMIN_IDS     = [int(x) for x in os.getenv("ADMIN_IDS", "8743265231").split(",") if x.strip()]
+BOT_TOKEN     = os.getenv("BOT_TOKEN",      "8741309097:AAE-8GtH5ke61H9zTIOu93rhSVrbJIYF6I0")
+ADMIN_IDS     = [int(x) for x in os.getenv("ADMIN_IDS", "8532799482").split(",") if x.strip()]
 DB_PATH       = os.getenv("DB_PATH",        "escrow.db")
 FEE_PERCENT   = float(os.getenv("FEE_PERCENT",    "4.0"))
 PAYMENT_HOURS = int(os.getenv("PAYMENT_HOURS",    "24"))
@@ -445,8 +445,7 @@ async def format_deal_message(d: Dict) -> str:
         f"  ▪️ İptal etmek için <code>/ticaret iptal {d['code']}</code> komutları kullanılabilir.\n\n"
         f"  ▪️ Bu anlaşmayı tekrar görüntülemek için  <code>/ticaretlerim</code> veya "
         f"<code>/ticaret sorgula {d['code']}</code> komutları kullanabilir.\n\n"
-        f"  ▪️ {admin_dl} tarihinden itibaren bu gruptaki yöneticiler "
-        f"{buyer_name} yerine bu ticareti onaylayabilir."
+        
     )
 
 # ═══════════════════════════════════════════════════════════
@@ -493,7 +492,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
         await msg.answer("🚫 Hesabınız yasaklandı.")
         return
     await msg.answer(
-        "🔐 <b>SpyHackerz Wallet & Escrow Botu</b>\n\n"
+        "🔐 <b>R10 Wallet & Escrow Botu</b>\n\n"
         "📋 <b>Escrow Komutları:</b>\n"
         "<code>/tic [miktar] [coin] @kullanici [açıklama]</code>\n"
         "<i>Örnek: /tic 24 USDT @kullanici saha işlemi</i>\n\n"
