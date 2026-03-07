@@ -528,7 +528,7 @@ async def cmd_help(msg: Message) -> None:
         "<b>Transfer (DM ve Grup):</b>\n"
         "<code>/gonder @kullanici miktar COIN</code>\n"
         "<code>/send @kullanici miktar COIN</code>\n"
-        "<i>Örnek: /send @kullamici 10 TRX</i>\n\n"
+        "<i>Örnek: /send @kullanici 10 TRX</i>\n\n"
     )
 
 # ═══════════════════════════════════════════════════════════
